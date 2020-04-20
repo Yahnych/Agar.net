@@ -9,79 +9,40 @@ using WebSocketSharp;
 using System.Collections.Generic;
 using SFML.System;
 using System.Threading;
+using Agar.Utils;
+using System.Diagnostics;
 
 namespace Agar
 {
     
     class Session 
     {
-
-
+        public const byte PROTOCOL_VERSION = 6;
         private WebSocket _ws;
         private bool _open;
         private World _world;
 
         private Queue<byte[]> _dataQueue;
-        private Mutex _dataMutex;
+        //private Mutex _dataMutex;
 
 
         public Session(World world)
         {
-            _open = false;
-            _ws = null;
             _world = world;
             _dataQueue = new Queue<byte[]>();
-            _dataMutex = new Mutex();
+            //_dataMutex = new Mutex();
         }
 
-
-        public void FindSession(string mode, string region)
+        public void ConnectToServer(string url)
         {
-
-            if (_open && _ws != null)
-            {
-                _dataQueue.Clear();
-                _ws.CloseAsync();
-                _ws = null;
-                _open = false;
-            }
-                
-
-
-            WebRequest request = WebRequest.Create("http://m.agar.io");
-            request.Method = "POST";
-
-            byte[] byteArray = Encoding.UTF8.GetBytes(region + mode);
-            request.ContentType = "application/x-www-form-urlencoded";
-            request.ContentLength = byteArray.Length;
-            Stream dataStream = request.GetRequestStream();
-            dataStream.Write(byteArray, 0, byteArray.Length);
-            dataStream.Close();
-            WebResponse response = request.GetResponse();
-            dataStream = response.GetResponseStream();
-            StreamReader reader = new StreamReader(dataStream);
-            string[] responseFromServer = reader.ReadToEnd().Split('\n');
-            reader.Close();
-            dataStream.Close();
-            response.Close();
-
-            string url = responseFromServer[0];
-            string key = responseFromServer[1];
-
-            ConnectToServer(url, key);
-
-        }
-
-        public void ConnectToServer(string url, string key)
-        {
-            _ws = new WebSocket("ws://"+url);
-            _ws.Origin = "http://agar.io";
-            _ws.Log.Level = LogLevel.None;
-
+            Console.WriteLine("Attempting to connect to " + url + " - ");
+            _ws = new WebSocket("ws://" + url);
+            _ws.Log.Level = LogLevel.Fatal;
             _ws.OnMessage += (sender, e) => {
-                _dataMutex.WaitOne();
+                //_dataMutex.WaitOne();
+                Console.WriteLine("en");
                 _dataQueue.Enqueue(e.RawData);
-                _dataMutex.ReleaseMutex();
+               // _dataMutex.ReleaseMutex();
             };
 
             _ws.OnError += (sender, e) => {
@@ -91,56 +52,44 @@ namespace Agar
             _ws.OnOpen += (sender, e) =>
             {
                 _open = true;
-
-                this.SendHandShake(key);
-
-                Console.WriteLine("Connection opened to " + url + " - " + key);
-
+                Console.WriteLine("Connection opened to " + url + " - ");
+                SendHandShake();
             };
 
             _ws.Connect();
         }
 
-        private void SendHandShake(string key)
+        private void SendHandShake()
         {
             {
                 MemoryStream ms = new MemoryStream();
                 BinaryWriter writer = new BinaryWriter(ms);
 
                 writer.Write((byte)254);
-                writer.Write(4);
-                Send(ms.ToArray());
+                writer.Write((uint)PROTOCOL_VERSION);
+                _ws.Send(ms.ToArray());
             }
-
             {
                 MemoryStream ms = new MemoryStream();
                 BinaryWriter writer = new BinaryWriter(ms);
 
                 writer.Write((byte)255);
-                writer.Write(154669603);
-                Send(ms.ToArray());
+                writer.Write(1);
+                _ws.Send(ms.ToArray());
             }
-
-            {
-                MemoryStream ms = new MemoryStream();
-                BinaryWriter writer = new BinaryWriter(ms);
-
-                writer.Write((byte)80);
-                writer.Write(ASCIIEncoding.ASCII.GetBytes(key));
-                Send(ms.ToArray());
-            }
+            Spawn("hi");
         }
 
         public void Update()
         {
             if(_open)
 
-            _dataMutex.WaitOne();
+            //_dataMutex.WaitOne();
             while(_dataQueue.Count != 0)
             {
                 Process(_dataQueue.Dequeue());
             }
-            _dataMutex.ReleaseMutex();
+            //_dataMutex.ReleaseMutex();
         }
 
         public bool IsOpen()
@@ -164,74 +113,66 @@ namespace Agar
         // handlers
         private void Process(byte[] data)
         {
-            //Console.WriteLine("Received data !");
+            Console.WriteLine("length: " + data.Length);
+            if (data.Length == 0)
+                return;
+            DataReader reader = new DataReader(data);
 
-            MemoryStream ms = new MemoryStream(data);
-            BinaryReader reader = new BinaryReader(ms, new UnicodeEncoding());
-
-
-            uint opcode = reader.ReadByte();
+            byte opcode = reader.ReadByte();
             switch (opcode)
             {
                 case 16: // Node update
-                    handleUpdateCells(reader);
+                    HandleCellUpdates(reader);
                     break;
 
                 case 17: // Update camera in spectator mode
-                    handleSpectateCameraMove(reader);
+                    UpdateSpectateView(reader);
                     break;
 
                 case 32: // Add Client cell
-                    handleSpawnCell(reader);
+                    HandledSpawnedCell(reader);
                     break;
 
                 case 49: // (FFA) Leaderboard Update
-                    handleFFALeaderboardUpdate(reader);
+                    FFALeaderboardUpdate(reader);
                     break;
 
                 case 50: // (Team) Leaderboard Update
-                    handleTeamLeaderboardUpdate(reader);
+                    TeamLeaderboardUpdate(reader);
                     break;
 
                 case 64: // World size message
-                    handleWorldInfo(reader);
+                    UpdateWorldInfo(reader);
                     break;
 
                 default:
                     Console.WriteLine("Unknown opcode : " + opcode);
-
                     break;
             }
-            
-        }
 
-        private void handleWorldInfo(BinaryReader data)
+        }
+        private void UpdateSpectateView(DataReader reader)
         {
-            float worldX = (float)data.ReadDouble();
-            float worldY = (float)data.ReadDouble();
-            float worldW = (float)data.ReadDouble();
-            float worldH = (float)data.ReadDouble();
-
-            _world.SetPosition(new Vector2f(worldX, worldY));
-            _world.SetSize(new Vector2f(worldW, worldH));
-
-            Console.WriteLine("World info : # " + worldX + " # " + worldY + " # " + worldW + " # " + worldH);
+            float x = reader.Read<float>();
+            float y = reader.Read<float>();
+            float s = reader.Read<float>();
+            _world.SetView(x, y, s);
         }
-
-        private void handleSpectateCameraMove(BinaryReader data)
+        public void UpdateWorldInfo(DataReader reader)
         {
-            float x = data.ReadSingle();
-            float y = data.ReadSingle();
-            float ratio = data.ReadSingle();
+            float left = (float)reader.Read<double>();
+            float top = (float)reader.Read<double>();
+            float right = (float)reader.Read<double>();
+            float bottom = (float)reader.Read<double>();
+            _world.SetPosition(new Vector2f(((left + right) / 2), ((top + bottom) / 2)));
+            _world.SetSize(new Vector2f(right - left, bottom - top));
 
-            _world.SetView(x, y, ratio);
+            //Console.WriteLine("World info : # " + worldX + " # " + worldY + " # " + worldW + " # " + worldH);
         }
-
-        private void handleFFALeaderboardUpdate(BinaryReader data)
+        private void FFALeaderboardUpdate(DataReader data)
         {
             /*
             uint32 count = data.getInt();
-
             for (uint32 i = 0; i < count; ++i)
             {
                 uint32 score = data.getInt();
@@ -240,96 +181,69 @@ namespace Agar
             */
         }
 
-        private void handleTeamLeaderboardUpdate(BinaryReader data)
+        private void TeamLeaderboardUpdate(DataReader data)
         {
             /*
             uint32 teamCount = data.getInt();
             std::vector<float> score;
-
             for (uint32 i = 0; i < teamCount; ++i)
                 score.push_back(data.getFloat());
-
             t0 = score[0];
             t1 = score[1];
             t2 = score[2];
             */
         }
-
-        private void handleSpawnCell(BinaryReader data)
+        private void HandledSpawnedCell(DataReader reader)
         {
-
-            _world.AddOwnedCell(data.ReadUInt32());
-            
+            _world.playing = true;
+            _world.AddOwnedCell(reader.Read<uint>());
         }
-
-        private void handleUpdateCells(BinaryReader data)
+        private void HandleCellUpdates(DataReader reader)
         {
-            
-            // Mergers
-            ushort mergeCount = data.ReadUInt16();
-            for (uint i = 0; i < mergeCount; ++i)
+            ushort consumeCount = reader.Read<ushort>();
+            for (int i = 0; i < consumeCount; i++)
             {
-                uint hunter = data.ReadUInt32();
-                uint prey = data.ReadUInt32();
-                _world.RemoveCell(prey);
-                //_world->removeCell(hunter);
+                uint eatenById = reader.Read<uint>();
+                uint victimId = reader.Read<uint>();
+                _world.RemoveCell(victimId);
             }
-
-            // Updates
-            uint id;
-            while ((id = data.ReadUInt32()) != 0)
+            uint cellId;
+            while ((cellId = reader.Read<uint>()) != 0)
             {
-                Cell c = _world.GetCell(id);
-                if (c == null)
-                    c = _world.AddCell(id);
-
-                ushort x, y, mass;
-                x = data.ReadUInt16();
-                y = data.ReadUInt16();
-                mass = data.ReadUInt16();
-
-                byte r, g, b, flags;
-                r = data.ReadByte();
-                g = data.ReadByte();
-                b = data.ReadByte();
-                flags = data.ReadByte();
-
-                if ((flags & 2) != 0)
-                    data.ReadBytes(4);
-                if ((flags & 4) != 0)
-                    data.ReadBytes(8);
-                if ((flags & 8) != 0)
-                    data.ReadBytes(16);
-
-                ushort t;
-                string name = "";
-                while ((t = data.ReadUInt16()) != 0)
+                int x = reader.Read<int>();
+                int y = reader.Read<int>();
+                ushort size = reader.Read<ushort>();
+                byte flags = reader.ReadByte();
+                bool isSpiked = (flags & 0x01) != 0;
+                bool newColor = (flags & 0x02) != 0;
+                bool newSkin = (flags & 0x04) != 0;
+                bool newName = (flags & 0x08) != 0;
+                bool isAgitated = (flags & 0x10) != 0;
+                bool isEjectedCell = (flags & 0x20) != 0;
+                Cell cell = _world.GetCell(cellId);
+                if (cell == null)
+                    cell = _world.AddCell(cellId);
+                if (newColor)
                 {
-                    name += new string((char)t, 1);
+                    byte r = reader.ReadByte();
+                    byte g = reader.ReadByte();
+                    byte b = reader.ReadByte();
+                    cell.Color = new Color(r, g, b, 255);
                 }
-
-
-                c.Position = new Vector2i(x, y);
-                c.Mass = mass;
-                c.Color = new Color(r, g, b, 255);
-                c.Name = name;
-
+                if (newSkin)
+                    reader.ReadUTF8String();
+                if (newName)
+                    cell.Name = reader.ReadUTF8String();
+                cell.Mass = size;
+                cell.Position = new Vector2i(x, y);
             }
-
-
-            //Death
-            uint deathCount = data.ReadUInt32();
-            for (uint i = 0; i < deathCount; ++i)
+            ushort deathCount = reader.Read<ushort>();
+            for (int i = 0; i < deathCount; i++)
             {
-                uint did = data.ReadUInt32();
-                _world.RemoveCell(did);
+                uint victimId = reader.Read<uint>();
+                _world.RemoveCell(victimId);
             }
-
-            
         }
-
-
-
 
         public void Spawn(string name = "")
         {

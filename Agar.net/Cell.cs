@@ -6,7 +6,7 @@ using SFML.System;
 
 namespace Agar
 {
-    class Cell
+    public class Cell
     {
         public Cell(uint id)
         {

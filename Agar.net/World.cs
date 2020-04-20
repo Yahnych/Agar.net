@@ -8,7 +8,7 @@ using System.Threading;
 
 namespace Agar
 {
-    class World
+    public class World
     {
         private RenderWindow _window;
         private Session _sess;
@@ -20,7 +20,7 @@ namespace Agar
 
         private float _viewX, _viewY, _viewRatio;
 
-        private bool playing, spectating;
+        public bool playing, spectating;
 
         public World()
         {
@@ -50,8 +50,6 @@ namespace Agar
 
         public void FindSession(string mode, string region)
         {
-            _sess.FindSession(mode, region);
-
             playing = false;
             spectating = false;
             cells.Clear();
@@ -63,18 +61,19 @@ namespace Agar
         }
 
 
-        public void Run()
+        public void Run(string address, int port)
         {
-            FindSession(Mode.FFA, Region.EU);
+            //FindSession(Mode.FFA, Region.EU);
            
             _window.SetVisible(true);
             _window.Closed += new EventHandler(OnClosed);
+            _sess.ConnectToServer(address + ":" + port);
             while (_window.IsOpen)
             {
                 Update();
                 Display();
-            }
-           
+            }           
+
         }
         public void OnClosed(object sender, EventArgs e)
         {
@@ -248,6 +247,7 @@ namespace Agar
             view.Center = new Vector2f(_viewX, _viewY);
             view.Zoom(1 / _viewRatio);
             _window.SetView(view);
+
         }
 
 
